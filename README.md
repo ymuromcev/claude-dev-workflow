@@ -19,6 +19,14 @@ practices.
 When you give Claude Code a coding task, the skill triggers
 automatically and:
 
+0. **Runs a pre-flight branch + backlog audit** before doing anything
+   else (`Pre-flight`). Checks that the current branch is in sync with
+   `main`, lists open PRs, and re-reads `private/backlog/` to surface
+   recent changes from other parallel sessions. Prevents two recurring
+   classes of bugs: stale-branch phantom-bugs (running commands from a
+   branch that's behind `main` and diagnosing the wrong code) and
+   duplicate work across parallel sessions sharing one backlog.
+
 1. **Classifies the task into a tier**:
    - **XS** — < 20 LOC, bug fix, single-file change. Minimal ceremony.
    - **M** — new feature, multi-file, non-trivial logic. Requires an RFC.

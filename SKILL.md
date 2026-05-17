@@ -1,6 +1,6 @@
 ---
 name: dev-workflow
-version: 0.3.0
+version: 0.4.0
 description: |
   Правила производственного цикла разработки кода для всех проектов Jared.
   Тирует задачу (XS / M / L), требует RFC перед кодом для M/L, обязательный
@@ -37,6 +37,133 @@ allowed-tools:
 Скилл применяется ко всем проектам Jared, где пишем код. Для продакт-задач
 (Notion, Jira, Confluence, тексты, оформление гипотез) не применяется — там
 работаем как раньше, без церемоний.
+
+## Pre-flight (перед Шагом 0) — branch + backlog audit
+
+Адресует два класса повторяющихся проблем:
+
+1. **Stale-branch trap**: запуск команды со ветки, отстающей от `main`,
+   даёт wrong результат → диагностируется как баг в коде → часы на
+   ложный фикс. Реальный кейс 2026-05-17 в `ai-job-searcher`:
+   `feat/reclassify-imap-bl44` отставала на 4 коммита (RFC 030), bridge-
+   роли wrongly Weak'нулись (BL-67 / BL-68).
+2. **Параллельные сессии + общий бэклог**: Jared часто работает в 2-3
+   сессиях одновременно. Между ними меняется `private/backlog/` и
+   состояние веток. Если новая BL берётся без re-read'а — риск
+   дублирующей работы или conflict'ов.
+
+### Когда запускать
+
+| Момент | Branch audit | Backlog audit |
+|---|---|---|
+| Первое касание dev-репо в сессии | ✅ обязательно | ✅ обязательно |
+| Между задачами в одной сессии (закрыл BL, иду за следующей) | ✅ обязательно | ✅ обязательно |
+| Перед merge / push / большой prep-командой (`prepare`, миграция) | ✅ обязательно | — |
+| На каждое сообщение | ❌ нет | ❌ нет |
+
+### A) Branch audit
+
+```bash
+git rev-parse --abbrev-ref HEAD                   # current branch
+git status -sb                                     # tree state + ahead/behind tracking
+git fetch origin main --quiet
+git rev-list --count HEAD..origin/main             # # of commits behind main
+git log --oneline HEAD..origin/main | head -10     # what's in those commits
+git worktree list                                   # other active worktrees
+gh pr list --state open --json number,title,headRefName,baseRefName 2>/dev/null
+```
+
+**Когда докладывать юзеру (обязательный отчёт)**:
+
+- Ветка отстаёт от `main` на >0 коммитов → одно сообщение: какая ветка,
+  на сколько, **что в недостающих коммитах** (короткими описаниями), и
+  предложить путь (merge main / rebase / switch to main). Не начинать
+  основную работу до согласования стратегии.
+- Working tree содержит правки в файлах, которые меняет open PR →
+  упомянуть возможный дубликат работы.
+- Несколько активных worktree'ев → перечислить.
+- Всё чисто, ветка up-to-date → одной строкой `branch: <name>,
+  in sync with main`.
+
+### B) Backlog audit
+
+```bash
+ls -lt private/backlog/*.md | head -15                              # what changed recently
+grep -l "^status: in_progress" private/backlog/*.md 2>/dev/null      # active claims
+grep -A1 "^status: in_progress" private/backlog/*.md 2>/dev/null     # who claimed
+```
+
+**Когда докладывать юзеру**:
+
+- BL'ы изменены за последние ~60 минут не моей сессией → перечислить
+  (другая сессия что-то сделала — стоит понять что, прежде чем
+  планировать).
+- BL `status: in_progress` с `claimed_by != моя сессия` → flag в отчёте:
+  «BL-X занята сессией `<branch>@<HH:MM>`, не беру».
+- BL `status: in_progress` с `claimed_at > 24h ago` без активности →
+  возможен stale claim, спросить юзера сбросить ли.
+
+### C) Claim mechanism (при взятии новой BL)
+
+**Identity сессии**: `<current-branch>@<HH:MM>`, например
+`feat/reclassify-imap-bl44@18:10`. Простой формат, человекочитаемый.
+Branch уникален per-worktree, время отличает разные сессии на одной
+ветке.
+
+**Алгоритм взятия BL**:
+
+1. Прочитать BL целиком (включая Plan, DoD, refs).
+2. Грепнуть `^claimed_by:` в BL — если уже claimed другой сессией и
+   `claimed_at` свежий → не брать, спросить юзера.
+3. Если free — отредактировать frontmatter BL:
+   ```yaml
+   status: in_progress
+   claimed_by: <branch-name>@<HH:MM>
+   claimed_at: <ISO-datetime>
+   ```
+4. Если frontmatter ранее не содержал этих полей — добавить их.
+5. Только после этого начинать первое действие по задаче.
+
+**Алгоритм завершения BL**:
+
+1. `status: in_progress → done`.
+2. Добавить `closed: <YYYY-MM-DD>`.
+3. `claimed_by` оставить (полезно для истории/debug — кто закрыл).
+4. Заполнить `## Progress` итогом: что сделано, ссылки на commits / PR.
+
+**Если задача abandon'ится посреди работы**:
+
+- `status: in_progress → open`.
+- Удалить `claimed_by` и `claimed_at` (либо переписать в `last_claimed_by`
+  если хочется audit-trail).
+- Дописать в `## Progress`: почему abandon, что успели.
+
+### Анти-паттерны
+
+- Молча начать работу с непроверенной ветки.
+- Взять BL без claim → другие параллельные сессии не увидят что она
+  занята → дубликат работы.
+- Между задачами полагаться на in-memory кэш бэклога. Между BL'ами
+  re-read обязателен, особенно если сессия идёт >1 часа.
+- При неожиданном результате (`prepare wrong`, `test fails по
+  необъяснимой причине`, «фича не работает хотя точно сделана») первая
+  мысль — диагностировать код. Должно быть наоборот: **first thought —
+  проверить свежесть ветки и состояние бэклога**.
+
+### Когда не запускать
+
+- Сессия про продакт-задачу (Notion, Jira, тексты, гипотезы) — dev-workflow
+  не применяется в принципе.
+- Папка без `.git/` — branch audit пропускается, backlog audit остаётся
+  если есть `private/backlog/`.
+- Чисто read-only лукапы по коду — необязательно, но желательно при
+  первом обращении к репо в сессии.
+
+### Cost
+
+~10 команд, ~3 секунды, ~500 токенов. Окупается одним предотвращённым
+phantom-багом или одним предотвращённым дубликатом работы между
+сессиями.
 
 ## Шаг 0 — классификация
 
