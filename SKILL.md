@@ -93,6 +93,24 @@ grep -l "^status: in_progress" private/backlog/*.md 2>/dev/null      # active cl
 grep -A1 "^status: in_progress" private/backlog/*.md 2>/dev/null     # who claimed
 ```
 
+**Worktree caveat (важно).** `private/` gitignored — он живёт **только в
+main checkout**, не реплицируется в `.claude/worktrees/<name>/`. Если
+cwd — это worktree (см. `git rev-parse --show-toplevel` против
+`git worktree list`), то `ls private/` вернёт "No such file" — это **не**
+значит, что BL'ов нет.
+
+Правильное действие:
+
+```bash
+# Определить main checkout (первая строка `git worktree list` — main)
+MAIN=$(git worktree list | head -1 | awk '{print $1}')
+ls -lt "$MAIN"/private/backlog/*.md | head -15
+grep -l "^status: in_progress" "$MAIN"/private/backlog/*.md 2>/dev/null
+```
+
+Или гонять команды из main checkout напрямую через absolute path. Тот же
+caveat применяется к **закрытию BL** — см. «Алгоритм завершения BL» ниже.
+
 **Когда докладывать юзеру**:
 
 - BL'ы изменены за последние ~60 минут не моей сессией → перечислить
@@ -130,6 +148,23 @@ Branch уникален per-worktree, время отличает разные �
 2. Добавить `closed: <YYYY-MM-DD>`.
 3. `claimed_by` оставить (полезно для истории/debug — кто закрыл).
 4. Заполнить `## Progress` итогом: что сделано, ссылки на commits / PR.
+
+**Worktree caveat при закрытии.** Если работаешь из `.claude/worktrees/<name>/`,
+файл `private/backlog/BL-NN.md` физически лежит в main checkout, не в
+worktree. Поэтому:
+
+- Edit/Write по worktree-relative пути либо упадёт с "file not found",
+  либо (если хук `check_worktree_path.sh` настроен) заблокируется при
+  попытке Edit'ить absolute path в main.
+- Делать через **`Bash` с absolute path**: `sed -i ''` для замены статуса /
+  `cat >> "$MAIN/private/backlog/BL-NN.md"` для дописки Progress.
+  Хук не трогает Bash, а файл gitignored — это не часть PR, обычное
+  housekeeping.
+- Альтернатива — переключить cwd в main checkout, но обычно избыточно
+  ради одного файла.
+
+Не пропускать закрытие, увидев "no private/" в worktree — это **гарантированная**
+ошибка, а не отсутствие BL.
 
 **Если задача abandon'ится посреди работы**:
 
@@ -330,6 +365,19 @@ private keys, AWS keys, имя/email автора.
 ### Финальный approve — всегда у пользователя
 Claude **не коммитит код без ok** (для M/L). Для XS — показывает diff и
 коммитит, если пользователь заранее дал зелёный свет.
+
+### Commit и push — атомарно (2026-05-17)
+После каждого `git commit` Claude **сразу же** делает `git push` без
+отдельного вопроса. Локальное состояние и GitHub синхронизируются
+автоматически. См. правило в проектном `CLAUDE.md` → раздел «Git push».
+
+Исключения (НЕ пушим автоматически):
+- pre-commit hook упал или тесты красные → сначала фиксим;
+- коммит в WIP-состоянии (явно отмечен как промежуточный);
+- force push в чужую ветку или `main`/`master` → требует явного approve.
+
+Если ветки нет в origin — `git push -u origin <branch>` (set upstream)
+автоматически.
 
 ## Шаг 6 — уровни безопасности (S1/S2/S3)
 
@@ -681,6 +729,12 @@ Tier-оценки (k):
       `scaffold-project/SKILL.md` секция Identity & PII rules.
 - [ ] Документация (SPEC / ARCHITECTURE / CHANGELOG / ADR / README / CLAUDE.md)
       обновлена под изменение поведения, если оно было — по таблице из Шага 9.
+- [ ] **BL закрыт в трекере** (если задача пришла из формального трекера —
+      `private/backlog/BL-NN.md`, Jira, Notion Tasks, Linear, etc.):
+      `status: done`, `closed: <YYYY-MM-DD>`, DoD-чекбоксы отмечены,
+      `## Progress` дописан с ссылками на commits / PR. Из worktree —
+      см. caveat в Backlog audit / Алгоритм завершения BL. Игнорировать
+      "no private/" из worktree — гарантированная ошибка.
 
 Если что-то не ок — исправляем, не спрашивая.
 
