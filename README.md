@@ -39,24 +39,37 @@ automatically and:
    language — what the user will see, type, and get. Approved in chat
    or written into a backlog item. Code starts only after approval.
 
-3. **Demands an RFC for M/L tasks** under
+3. **Switches to PM/dispatch mode when work is parallelisable**
+   (`Шаг 0.7`). On a batch of ≥2 independent tasks (even all XS), or
+   one M/L task that cleanly splits into independent units, Claude
+   takes the project-manager role: decomposes the work into user-level
+   units, gets explicit approval, then dispatches one subagent per
+   unit into its own git worktree, runs them in parallel, monitors
+   progress, integrates the results, and runs a single cross-cutting
+   review on the merged diff. Agents never talk to each other — the
+   interface contract stays with Claude. If an agent goes off-spec,
+   Claude reopens the unit with a corrected brief; never silently
+   takes over. Triggered automatically (with a visible gate) or
+   manually via `/dev-workflow dispatch`.
+
+4. **Demands an RFC for M/L tasks** under
    `<project>/rfc/NNN-title.md`: problem → options → chosen + why →
    risks → verification plan. Code is blocked until the user approves
    the RFC.
 
-4. **Requires a smoke test even for XS**. One trivial test proving the
+5. **Requires a smoke test even for XS**. One trivial test proving the
    primary function gets called and returns the expected shape. Catches
    ~80% of refactor breakage in two minutes.
 
-5. **Runs multi-agent code review for M/L**. A `code-reviewer` subagent
+6. **Runs multi-agent code review for M/L**. A `code-reviewer` subagent
    gets the diff and reports findings on readability, edge cases,
    over-engineering, and secrets. For L-tier, also runs
    `/security-review` and `/review`.
 
-6. **Final approval is always the user's**. Claude does not commit
+7. **Final approval is always the user's**. Claude does not commit
    M/L code without an explicit "ok".
 
-7. **Incrementally scales security through S1/S2/S3 levels**:
+8. **Incrementally scales security through S1/S2/S3 levels**:
    - **S1** — local scripts and personal tools. `/security-review` for
      L-tier, secret-detection in code review.
    - **S2** — pre-prod SaaS with auth or a public URL. SAST
@@ -65,7 +78,7 @@ automatically and:
    - **S3** — production with real users. A pentest subagent against
      staging, external audit before paid customers.
 
-8. **Blameless incident log** in `<project>/incidents.md` — what
+9. **Blameless incident log** in `<project>/incidents.md` — what
    broke, root cause, what we changed so it doesn't repeat.
 
 The full content (testing pyramid, lint setup, pre-commit hook policy,
@@ -144,6 +157,20 @@ A typical L interaction:
 
 Same as M but also runs `/security-review` and requires a phased
 plan with rollback. No code starts until the full plan is approved.
+
+A typical **PM/dispatch interaction**:
+
+```
+> close BL-12 through BL-15 — README updates across four projects
+```
+
+Claude proposes a 4-unit decomposition (one project per unit, all
+independent, no file overlap), shows what the user will see after
+each unit, asks "parallelise?". On "go", launches four subagents in
+their own worktrees in parallel, surfaces a one-line status per unit
+as they finish, reopens any unit that came back off-spec, merges the
+four worktrees, runs one combined review, and reports done. Claude
+itself writes no code in this flow — only orchestrates.
 
 ## Why publish this?
 
